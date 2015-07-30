@@ -1,0 +1,111 @@
+using CCBSign;
+using System;
+using System.Collections.Generic;
+using System.Configuration;
+using System.IO;
+using System.Linq;
+using System.Web;
+using System.Web.UI;
+using System.Web.UI.WebControls;
+using Wicture.Data.Models.ViewModel;
+using Wicture.Data.MySQL.UserApp;
+using Wicture.Wochu.API.Pay.CCB;
+
+namespace Wicture.Wochu.API.Pay.CCB
+{
+    public partial class CCBPaySuccess : System.Web.UI.Page
+    {
+        readonly log4net.ILog logger = log4net.LogManager.GetLogger("CCB");
+        protected void Page_Load(object sender, EventArgs e)
+        {
+            PaySuccessmethod();
+        }
+
+        public void PaySuccessmethod()
+        {
+            try
+            {
+                string signString = Request.QueryString["SIGN"].Trim();
+
+                //本地Key值
+                string pubKey = ConfigurationManager.AppSettings["PublicKey"].ToString().Trim();
+
+                CCBTextModel ccbmodel = new CCBTextModel();
+                ccbmodel.POSID = Request.QueryString["POSID"].Trim();
+                ccbmodel.BRANCHID = Request.QueryString["BRANCHID"].Trim();
+                ccbmodel.ORDERID = Request.QueryString["ORDERID"].Trim();
+                ccbmodel.PAYMENT = Convert.ToDecimal(Request.QueryString["PAYMENT"].Trim());
+                ccbmodel.CURCODE = Request.QueryString["CURCODE"].Trim();
+                ccbmodel.REMARK1 = Request.QueryString["REMARK1"].Trim();
+                ccbmodel.REMARK2 = Request.QueryString["REMARK2"].Trim();
+
+
+                //签名源串
+                string initString = "POSID=" + ccbmodel.POSID
+                    + "&BRANCHID=" + ccbmodel.BRANCHID
+                    + "&ORDERID=" + ccbmodel.ORDERID
+                    + "&PAYMENT=" + ccbmodel.PAYMENT
+                    + "&CURCODE=" + ccbmodel.CURCODE
+                    + "&REMARK1=" + ccbmodel.REMARK1
+                    + "&REMARK2=" + ccbmodel.REMARK2
+                    + "&SUCCESS=" + Request.QueryString["SUCCESS"].Trim()
+                    + "&TYPE=" + Request.QueryString["TYPE"].Trim()
+                    + "&REFERER=" + Request.QueryString["REFERER"].Trim()
+                    + "&CLIENTIP=" + Request.QueryString["CLIENTIP"].Trim()
+                    + "&ACCDATE=" + Request.QueryString["ACCDATE"].Trim();
+                RSASig sign = new RSASig();
+                sign.setPublicKey(pubKey);
+
+                bool result = sign.verifySigature(signString, initString);
+               
+                if (true == result)//验证成功
+                {
+                    UpdatePayment(ccbmodel);//支付成功返回调用修改订单状态
+                    Console.WriteLine("RSA verified!");
+                }
+                else//验证失败
+                {
+                    Console.WriteLine("RSA not verified!");
+                }
+            }
+            catch (Exception ex)
+            {
+                ////写文本，纪录中国建设银行返回消息，比对md5计算结果（如网站不支持写txt文件，可改成写数据库）
+                string TOEXCELLR = Request.Url.ToString() + "   " + ex.Message.ToString() + Request.UserHostName.Trim();
+                logger.Error("更新建行支付状态失败：" + TOEXCELLR + ",系统错误：", ex);       
+            }
+        }
+
+        private void UpdatePayment(CCBTextModel ccbmodel)
+        {
+            try
+            {
+                decimal rate = Convert.ToDecimal(ConfigurationManager.AppSettings["cashCard:rate"]);// 兑换积分比率 1元换100积分
+                var paymentInfo = new PaymentInfo()
+                {
+                    isPaid = 1,
+                    orderType = 0,
+                    orderSN = ccbmodel.ORDERID,
+                    tradeNo = ccbmodel.ORDERID,
+                    status = (int)PayStatus.PS_PAYED,
+                    moneyPaid = ccbmodel.PAYMENT,
+                    orderAmount = ccbmodel.PAYMENT,
+                    notifyTime = DateTime.Now.GetUnixTime(),
+                    payTime = DateTime.Now.GetUnixTime(),
+                    orderStatus = (int)OrderInfoStatus.Confirmed,
+                    rate = rate
+                };
+
+                UserAppOrderInfoRepository repo = new UserAppOrderInfoRepository();
+
+                repo.UpdatePayment(paymentInfo);
+
+                logger.Info(string.Format("更新建行支付状态成功。订单号：{0}", paymentInfo.orderSN));
+            }
+            catch (Exception ex)
+            {
+                logger.Error("更新建行支付状态失败：\r\n", ex);
+            }
+        }
+    }
+}
